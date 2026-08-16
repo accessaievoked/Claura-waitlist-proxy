@@ -6,7 +6,58 @@ import { adminFetch, esc } from '../lib/shopify.js';
 
 const METAOBJECT_TYPE = 'notify_me_entry';
 
-export default async function handler(req, res) {
+// Groups entries by phone number and renders a table body where the
+// name/phone/date cells span all of that person's rows (rowspan), so one
+// customer with several product requests reads as one group instead of
+// repeated identical name/phone cells.
+function renderGroupedRows(entries) {
+  const groups = new Map(); // phone -> entries[]
+  entries.forEach((e) => {
+    const key = e.phone || '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  });
+
+  let rowNum = 0;
+  const chunks = [];
+  for (const [phone, group] of groups) {
+    const waNum = (phone || '').replace('+', '');
+    group.forEach((e, i) => {
+      rowNum += 1;
+      const dt = e.submitted_at
+        ? new Date(e.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' })
+        : '—';
+      const statusBadge = e.notified === 'true'
+        ? '<span class="badge badge--done">Notified</span>'
+        : '<span class="badge badge--pending">Pending</span>';
+
+      if (i === 0) {
+        chunks.push(`
+          <tr class="group-start">
+            <td>${rowNum}</td>
+            <td rowspan="${group.length}">${esc(e.name || '')}</td>
+            <td rowspan="${group.length}"><a href="https://wa.me/${esc(waNum)}" target="_blank">${esc(phone)}</a></td>
+            <td>${esc(dt)}</td>
+            <td>${esc(e.product_title || '')}</td>
+            <td><span class="badge">${esc(e.variant_title || '')}</span></td>
+            <td>${statusBadge}</td>
+          </tr>`);
+      } else {
+        chunks.push(`
+          <tr>
+            <td>${rowNum}</td>
+            <td>${esc(dt)}</td>
+            <td>${esc(e.product_title || '')}</td>
+            <td><span class="badge">${esc(e.variant_title || '')}</span></td>
+            <td>${statusBadge}</td>
+          </tr>`);
+      }
+    });
+  }
+  return chunks.join('');
+}
+
+
   const pin = req.query.pin;
   if (pin !== process.env.DASHBOARD_PIN) {
     res.status(401).send('Unauthorized — add ?pin=YOUR_PIN to the URL.');
@@ -54,25 +105,7 @@ export default async function handler(req, res) {
       </div>
     `).join('');
 
-  const rows = entries.map((e, i) => {
-    const dt = e.submitted_at
-      ? new Date(e.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' })
-      : '—';
-    const waNum = (e.phone || '').replace('+', '');
-    const statusBadge = e.notified === 'true'
-      ? '<span class="badge badge--done">Notified</span>'
-      : '<span class="badge badge--pending">Pending</span>';
-    return `
-      <tr>
-        <td>${i + 1}</td>
-        <td>${esc(dt)}</td>
-        <td>${esc(e.name || '')}</td>
-        <td><a href="https://wa.me/${esc(waNum)}" target="_blank">${esc(e.phone || '')}</a></td>
-        <td>${esc(e.product_title || '')}</td>
-        <td><span class="badge">${esc(e.variant_title || '')}</span></td>
-        <td>${statusBadge}</td>
-      </tr>`;
-  }).join('');
+  const rows = renderGroupedRows(entries);
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -106,6 +139,7 @@ export default async function handler(req, res) {
   a:hover { text-decoration: underline; }
   .badge { display: inline-block; padding: 3px 8px; background: #f1f2f4; border-radius: 4px; font-size: 11px; color: #555; white-space: nowrap; }
   .badge--pending { background: #fff4e5; color: #a15c00; }
+  tr.group-start td { border-top: 2px solid #e3e5e8; }
   .badge--done { background: #e6f4ea; color: #1e7e34; }
   .empty { text-align: center; padding: 48px; color: #aaa; font-size: 13px; }
   .count-pill { display: inline-block; background: #f1f2f4; border-radius: 10px; padding: 1px 7px; font-size: 11px; color: #666; margin-left: 4px; }
@@ -137,7 +171,7 @@ export default async function handler(req, res) {
     <div style="overflow-x:auto;">
       <table id="tbl">
         <thead>
-          <tr><th>#</th><th>Date (IST)</th><th>Name</th><th>WhatsApp</th><th>Product</th><th>Colour / Size</th><th>Status</th></tr>
+          <tr><th>#</th><th>Name</th><th>WhatsApp</th><th>Date (IST)</th><th>Product</th><th>Colour / Size</th><th>Status</th></tr>
         </thead>
         <tbody id="tbody">
           ${rows || '<tr><td colspan="7" class="empty">No entries yet.</td></tr>'}
@@ -161,15 +195,37 @@ export default async function handler(req, res) {
     document.getElementById('count-pill').textContent = filtered.length + ' results';
     var tbody = document.getElementById('tbody');
     if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No entries found.</td></tr>'; return; }
-    tbody.innerHTML = filtered.map(function(e, i) {
-      var dt = e.submitted_at ? new Date(e.submitted_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'short',timeStyle:'short'}) : '—';
-      var waNum = (e.phone||'').replace('+','');
-      var status = e.notified === 'true' ? '<span class="badge badge--done">Notified</span>' : '<span class="badge badge--pending">Pending</span>';
-      return '<tr><td>'+(i+1)+'</td><td>'+dt+'</td><td>'+(e.name||'')+'</td>'
-        + '<td><a href="https://wa.me/'+waNum+'" target="_blank">'+(e.phone||'')+'</a></td>'
-        + '<td>'+(e.product_title||'')+'</td><td><span class="badge">'+(e.variant_title||'')+'</span></td>'
-        + '<td>'+status+'</td></tr>';
-    }).join('');
+
+    var groups = new Map();
+    filtered.forEach(function(e) {
+      var key = e.phone || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(e);
+    });
+
+    var rowNum = 0;
+    var html = '';
+    groups.forEach(function(group, phone) {
+      var waNum = (phone || '').replace('+', '');
+      group.forEach(function(e, i) {
+        rowNum += 1;
+        var dt = e.submitted_at ? new Date(e.submitted_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'short',timeStyle:'short'}) : '—';
+        var status = e.notified === 'true' ? '<span class="badge badge--done">Notified</span>' : '<span class="badge badge--pending">Pending</span>';
+        if (i === 0) {
+          html += '<tr class="group-start"><td>' + rowNum + '</td>'
+            + '<td rowspan="' + group.length + '">' + (e.name||'') + '</td>'
+            + '<td rowspan="' + group.length + '"><a href="https://wa.me/' + waNum + '" target="_blank">' + (e.phone||'') + '</a></td>'
+            + '<td>' + dt + '</td><td>' + (e.product_title||'') + '</td>'
+            + '<td><span class="badge">' + (e.variant_title||'') + '</span></td>'
+            + '<td>' + status + '</td></tr>';
+        } else {
+          html += '<tr><td>' + rowNum + '</td><td>' + dt + '</td><td>' + (e.product_title||'') + '</td>'
+            + '<td><span class="badge">' + (e.variant_title||'') + '</span></td>'
+            + '<td>' + status + '</td></tr>';
+        }
+      });
+    });
+    tbody.innerHTML = html;
   }
 </script>
 </body>
