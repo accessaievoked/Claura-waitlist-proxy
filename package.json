@@ -1,0 +1,10 @@
+{
+  "name": "claura-notify-me-backend",
+  "version": "1.0.0",
+  "description": "Back-in-stock notify-me proxy for Claura (Shopify Metaobjects + ConvertWay WhatsApp)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  }
+}
