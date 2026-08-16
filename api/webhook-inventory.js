@@ -12,7 +12,7 @@
 // → Webhooks in the Shopify admin.
 
 import crypto from 'crypto';
-import { adminFetch } from '../lib/shopify.js';
+import { adminFetch, fetchAllMetaobjects } from '../lib/shopify.js';
 import { sendWhatsApp } from '../lib/convertway.js';
 
 const METAOBJECT_TYPE = 'notify_me_entry';
@@ -60,26 +60,13 @@ async function getVariantFromInventoryItem(inventoryItemId) {
 }
 
 async function getPendingEntriesForVariant(variantNumericId) {
-  const query = `
-    query FindPending($q: String!) {
-      metaobjects(type: "${METAOBJECT_TYPE}", first: 100, query: $q) {
-        edges {
-          node {
-            id
-            fields { key value }
-          }
-        }
-      }
-    }
-  `;
-  const data = await adminFetch(query, {
-    q: `fields.variant_id:'${variantNumericId}' AND fields.notified:'false'`,
-  });
-  return (data?.data?.metaobjects?.edges || []).map((edge) => {
-    const obj = { _id: edge.node.id };
-    edge.node.fields.forEach((f) => { obj[f.key] = f.value; });
-    return obj;
-  });
+  // Filtered client-side, not via Shopify's query: parameter -- see
+  // fetchAllMetaobjects in lib/shopify.js for why that filter isn't
+  // reliable for fields not marked "Admin filterable."
+  const allEntries = await fetchAllMetaobjects(METAOBJECT_TYPE);
+  return allEntries.filter(
+    (e) => e.variant_id === String(variantNumericId) && e.notified !== 'true'
+  );
 }
 
 async function markNotified(metaobjectId) {
