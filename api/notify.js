@@ -1,8 +1,8 @@
 // api/notify.js
-// POST — save a new "notify me when back in stock" entry
-// GET  — fetch all entries (pin-protected, used by the dashboard)
+// POST -- save a new "notify me when back in stock" entry
+// GET  -- fetch all entries (pin-protected, used by the dashboard)
 
-import { adminFetch, setCors } from '../lib/shopify.js';
+import { adminFetch, fetchAllMetaobjects, setCors } from '../lib/shopify.js';
 
 const METAOBJECT_TYPE = 'notify_me_entry';
 
@@ -16,7 +16,7 @@ async function handlePost(req, res) {
     name,
     phone,
     variant_id,
-    variant_title,   // e.g. "Blue / M" — encodes colour/size
+    variant_title,   // e.g. "Blue / M" -- encodes colour/size
     product_id,
     product_title,
     product_handle,
@@ -27,18 +27,13 @@ async function handlePost(req, res) {
     return res.status(400).json({ ok: false, error: 'Missing required fields' });
   }
 
-  // Prevent duplicate active requests for the same phone + variant
-  const dupeQuery = `
-    query FindDupe($q: String!) {
-      metaobjects(type: "${METAOBJECT_TYPE}", first: 1, query: $q) {
-        edges { node { id } }
-      }
-    }
-  `;
-  const dupeCheck = await adminFetch(dupeQuery, {
-    q: `fields.phone:'${phone}' AND fields.variant_id:'${variant_id}' AND fields.notified:'false'`,
-  });
-  const alreadyExists = dupeCheck?.data?.metaobjects?.edges?.length > 0;
+  // Prevent duplicate active requests for the same phone + variant.
+  // Filtered client-side (not via Shopify's query: parameter -- see
+  // fetchAllMetaobjects for why that filter isn't reliable here).
+  const allEntries = await fetchAllMetaobjects(METAOBJECT_TYPE);
+  const alreadyExists = allEntries.some(
+    (e) => e.phone === String(phone) && e.variant_id === String(variant_id) && e.notified !== 'true'
+  );
   if (alreadyExists) {
     return res.status(200).json({ ok: true, alreadyRequested: true });
   }
@@ -87,28 +82,7 @@ async function handleGet(req, res) {
     return res.status(401).json({ ok: false, error: 'Unauthorized' });
   }
 
-  const query = `{
-    metaobjects(type: "${METAOBJECT_TYPE}", first: 250) {
-      edges {
-        node {
-          id
-          fields { key value }
-        }
-      }
-    }
-  }`;
-
-  const data = await adminFetch(query);
-  if (data.errors) {
-    return res.status(500).json({ ok: false, error: data.errors[0].message });
-  }
-
-  const entries = (data.data?.metaobjects?.edges || []).map((edge) => {
-    const obj = { _id: edge.node.id };
-    edge.node.fields.forEach((f) => { obj[f.key] = f.value; });
-    return obj;
-  });
-
+  const entries = await fetchAllMetaobjects(METAOBJECT_TYPE);
   entries.sort((a, b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0));
 
   return res.status(200).json({ ok: true, entries });
