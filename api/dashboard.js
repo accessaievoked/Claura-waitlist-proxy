@@ -57,7 +57,7 @@ function renderGroupedRows(entries) {
   return chunks.join('');
 }
 
-
+export default async function handler(req, res) {
   const pin = req.query.pin;
   if (pin !== process.env.DASHBOARD_PIN) {
     res.status(401).send('Unauthorized — add ?pin=YOUR_PIN to the URL.');
